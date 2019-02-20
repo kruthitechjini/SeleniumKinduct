@@ -1,0 +1,192 @@
+apply plugin: 'java'
+
+ext {
+    artifactRepoBase = "https://nexus.spireon.com/nexus/content/repositories"
+}
+
+repositories {
+    mavenCentral()
+    mavenLocal()
+    jcenter()
+    maven {
+        credentials {
+            username nexusUsername
+            password nexusPassword
+        }
+        // The extention block is not visible here.  So much for DRY.
+        url "https://nexus.spireon.com/nexus/content/repositories/spireon-snapshot"
+    }
+    maven {
+        credentials {
+            username nexusUsername
+            password nexusPassword
+        }
+        // The extention block is not visible here.  So much for DRY.
+        url "https://nexus.spireon.com/nexus/content/repositories/spireon-release"
+    }
+    maven { url "http://repo.maven.apache.org/maven2" }
+    maven { url "http://dl.bintray.com/epam/reportportal" }
+    maven { url "https://jitpack.io" }
+}
+
+if (!hasProperty('nexusUsername') || !hasProperty('nexusPassword')) {
+    println "\nTo upload to Nexus, define 'nexusUsername' and 'nexusPassword' properties in ~/.gradle/gradle.properties file\n"
+}
+
+loadConfiguration()
+
+def loadConfiguration() {
+    def environment = hasProperty('env') ? env : 'dev'
+    ext.env = environment
+    println "Environment is set to $environment"
+
+    def configFile = file('config.groovy')
+    def config = new ConfigSlurper(environment).parse(configFile.toURL())
+    ext.config = config
+
+    ext.groups = hasProperty('groups') ? getProperty('groups') : ''
+    ext.exgroups = hasProperty('exgroups') ? getProperty('exgroups') : ''
+    ext.retryCount = hasProperty('retryCount') ? getProperty('retryCount') : '1'
+    ext.threads = hasProperty('threadCount') ? getProperty('threadCount') : '1'
+    ext.hub_url = hasProperty('hub_url') ? getProperty('hub_url') : ''
+}
+
+dependencies {
+    testCompile 'com.epam.reportportal:commons-model:4.0.3'
+    testCompile 'com.epam.reportportal:agent-java-testng:4.0.2'
+
+    testCompile 'org.testng:testng:6.13.1'
+    testCompile 'org.seleniumhq.selenium:selenium-java:3.8.1'
+    testCompile('com.galenframework:galen-java-support:2.3.3') {
+        exclude group: 'org.slf4j', module: 'slf4j-simple'
+    }
+    testCompile 'org.apache.commons:commons-csv:1.4'
+    testCompile 'commons-io:commons-io:2.5'
+    testCompile 'com.fasterxml.jackson.core:jackson-databind:2.9.7'
+    testCompile 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.9.7'
+
+    testCompile 'com.mashape.unirest:unirest-java:1.4.9'
+    testCompile 'com.sun.mail:javax.mail:1.6.0'
+    testCompile 'net.jodah:failsafe:1.0.5'
+    testCompile 'org.mongodb:mongodb-driver:3.6.1'
+    testCompile 'ch.qos.logback:logback-classic:1.2.3'
+    testCompile 'com.epam.reportportal:logger-java-logback:4.0.0'
+    testCompile 'org.apache.commons:commons-lang3:3.3.2'
+    testCompile 'com.spireon:automotive-client:1.7.0'
+    testCompile 'com.spireon:automotive-cdm-java:1.7.0'
+    testCompile 'com.spireon:platform-test-utils:0.7'
+    testCompile 'org.jsoup:jsoup:1.7.2'
+}
+
+test {
+    // enable TestNG
+    useTestNG() {
+        configFailurePolicy 'continue'
+        useDefaultListeners = true
+        reports.html.enabled = false
+        // not using testng.xml because it overwrites the parallel config set by gradle
+        //suites 'src/test/resources/testng.xml'
+        if (groups?.trim()) {
+            includeGroups groups.split(',')
+        }
+        if (exgroups?.trim()) {
+            excludeGroups exgroups.split(',')
+        }
+        // unless galen/layout tests are specifically included, we exclude them
+        def testLayout = includeGroups.contains('galen') || includeGroups.contains('layout')
+        if (!testLayout) {
+            excludeGroups.add('galen')
+            excludeGroups.add('layout')
+        }
+        // unless o2c renewal test are specifically included, we exclude it
+        def testRenewals = includeGroups.contains('o2c')
+        if (!testRenewals) {
+            excludeGroups.add('o2c')
+        }
+
+        listeners << 'com.procon.vehiclefinance.util.RetryListener'
+        listeners << 'com.procon.vehiclefinance.util.TestsCounter'
+        if (project.hasProperty('rPortalLaunchName')) {
+            environment "rp.launch", getProperty('rPortalLaunchName')
+            if (project.hasProperty('rPortalTags')) {
+                environment "rp.tags", getProperty('rPortalTags')
+            }
+            listeners << 'com.epam.reportportal.testng.ReportPortalTestNGListener'
+            println("\n -- Report Portal Listener Enabled --\n")
+        }
+        setThreadCount threads.toInteger()
+        // use either 'classes' or 'methods'
+        setParallel 'classes'
+    }
+
+    // project/system properties
+    systemProperty 'env', env
+    systemProperty 'baseUrl', findProperty('baseUrl') ?: config.baseUrl
+    systemProperty 'userName', findProperty('userName') ?: config.userName
+    systemProperty 'password', findProperty('password') ?: config.password
+    systemProperty 'renewalsPage', findProperty('renewalsPage') ?: config.renewalsPage
+    systemProperty 'logoSrc', config.logoSrc
+    systemProperty 'invalidLoginTest', config.invalidLoginTest
+    systemProperty 'adminUserTypeData', config.adminUserTypeData
+    systemProperty 'retryCount', retryCount
+    systemProperty 'webdriver.chrome.driver', System.getProperty('webdriver.chrome.driver', './chromedriver')
+    systemProperty 'platform', System.getProperty('platform','linux')
+    systemProperty 'browser', System.getProperty('browser', 'chrome')
+    systemProperty 'ffVersion', System.getProperty('ffVersion','59')
+    systemProperty 'hub_url', getProperty('hub_url')
+    systemProperty 'emailId', config.emailId
+    systemProperty 'emailPassword', config.emailPassword
+    systemProperty 'buildName', findProperty('buildName') ?: ''
+    systemProperty 'video_url', findProperty('video_url') ?: ''
+    systemProperty 'rPortalLaunchName', findProperty('rPortalLaunchName') ?: ''
+    systemProperty 'logging.rootLevel', findProperty('logging.rootLevel') ?: 'INFO'
+    systemProperty 'glSvcUrl', config.glSvcUrl
+    systemProperty 'identitySvcUrl', config.identitySvcUrl
+    systemProperty 'eisSvcUrl', config.eisSvcUrl
+    systemProperty 'o2cUrl', config.o2cUrl
+    systemProperty 'notificationsSvcUrl', config.notificationsSvcUrl
+    systemProperty 'automotiveSvcUrl', config.automotiveSvcUrl
+    systemProperty 'platformSvcUrl', config.platformSvcUrl
+    systemProperty 'dealerUser', config.dealerUser
+    systemProperty 'dealerPassword', config.dealerPassword
+    systemProperty 'dealerAppToken', config.dealerAppToken
+    systemProperty 'vehicleServiceUrl', config.vehicleServiceUrl
+    systemProperty 'rmqHost', config.rmqHost
+    systemProperty 'rmqPort', config.rmqPort
+    systemProperty 'rmqUsername', config.rmqUsername
+    systemProperty 'rmqPassword', config.rmqPassword
+    systemProperty 'zaleniumRecordVideo', findProperty('zaleniumRecordVideo') ?: 'false'
+    systemProperty 'searchKey', findProperty('searchKey') ?: ''
+
+    if (findProperty('reports_dir')) {
+        reports.junitXml.destination = "$buildDir/${findProperty('reports_dir')}"
+        reports.html.destination = "$buildDir/reports-${findProperty('reports_dir')}"
+    }
+
+    testLogging {
+        // set options for log level LIFECYCLE
+        events "passed", "skipped", "failed", "standardOut"
+        showExceptions true
+        exceptionFormat "full"
+        showCauses true
+        showStackTraces true
+
+        // set options for log level DEBUG and INFO
+        debug {
+            events "started", "passed", "skipped", "failed", "standardOut", "standardError"
+            exceptionFormat "full"
+        }
+        info.events = debug.events
+        info.exceptionFormat = debug.exceptionFormat
+
+        afterSuite { desc, result ->
+            if (!desc.parent) { // will match the outermost suite
+                def output = "Results: ${result.resultType} (${result.testCount} tests, ${result.successfulTestCount} successes, ${result.failedTestCount} failures, ${result.skippedTestCount} skipped)"
+                def startItem = '|  ', endItem = '  |'
+                def repeatLength = startItem.length() + output.length() + endItem.length()
+                println('\n' + ('-' * repeatLength) + '\n' + startItem + output + endItem + '\n' + ('-' * repeatLength))
+            }
+        }
+    }
+    testLogging.showStandardStreams = true
+}
